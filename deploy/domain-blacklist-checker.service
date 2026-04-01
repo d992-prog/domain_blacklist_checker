@@ -1,0 +1,18 @@
+[Unit]
+Description=Domain Blacklist Checker
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/domain-blacklist-checker/backend
+EnvironmentFile=/opt/domain-blacklist-checker/backend/.env
+ExecStart=/opt/domain-blacklist-checker/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
