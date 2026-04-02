@@ -177,7 +177,7 @@ async def get_history(
     request: Request,
     domain: str | None = Query(default=None),
     days: int = Query(default=30, ge=1, le=365),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ):
     normalized = normalize_domain(domain) if domain else None
     if domain and not normalized:
@@ -190,7 +190,7 @@ async def get_history(
 async def create_webhook(
     payload: WebhookRequest,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> WebhookResponse:
     runner = get_job_runner(request)
     webhook = await runner.create_webhook(user.id, str(payload.url), payload.events)
@@ -200,7 +200,7 @@ async def create_webhook(
 @router.get("/webhook", response_model=list[WebhookResponse])
 async def list_webhooks(
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> list[WebhookResponse]:
     runner = get_job_runner(request)
     hooks = await runner.list_webhooks(user.id)
@@ -214,7 +214,7 @@ async def list_webhooks(
 async def delete_webhook(
     webhook_id: int,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> dict[str, str]:
     runner = get_job_runner(request)
     deleted = await runner.delete_webhook(user.id, webhook_id)
@@ -227,7 +227,7 @@ async def delete_webhook(
 async def test_webhook(
     webhook_id: int,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> dict[str, str]:
     runner = get_job_runner(request)
     sent = await runner.send_test_webhook(user.id, webhook_id)

@@ -110,11 +110,13 @@ function AuthScreen({
   locale,
   onLogin,
   onRegister,
+  onLocaleChange,
   authLoading,
 }: {
   locale: Locale;
   onLogin: (username: string, password: string, remember: boolean) => Promise<void>;
   onRegister: (username: string, password: string) => Promise<void>;
+  onLocaleChange: (locale: Locale) => void;
   authLoading: boolean;
 }) {
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -133,24 +135,25 @@ function AuthScreen({
 
   return (
     <div className="auth-shell">
-      <section className="auth-card hero-card">
+      <section className="auth-card">
         <div className="auth-copy">
-          <p className="eyebrow">{t(locale, "Личный кабинет и админка", "Private workspace and admin")}</p>
+          <div className="lang-switch auth-lang-switch">
+            <button type="button" className={locale === "ru" ? "tab-button active" : "tab-button"} onClick={() => onLocaleChange("ru")}>
+              RU
+            </button>
+            <button type="button" className={locale === "en" ? "tab-button active" : "tab-button"} onClick={() => onLocaleChange("en")}>
+              EN
+            </button>
+          </div>
           <h1>Domain Blacklist Checker</h1>
           <p className="subtitle">
             {t(
               locale,
-              "Регистрация, отдельные данные на пользователя, глобальные API-ключи в админке и короткие карточки результатов сверху.",
-              "Registration, isolated user data, global API keys in admin, and compact result cards at the top.",
+              "Войдите в аккаунт или отправьте заявку на регистрацию.",
+              "Sign in to your account or submit a registration request.",
             )}
           </p>
-          <div className="hero-meta">
-            <span className="muted-chip">RU / EN</span>
-            <span className="muted-chip">{t(locale, "Свои прокси", "Own proxies")}</span>
-            <span className="muted-chip">{t(locale, "Своя история", "Own history")}</span>
-          </div>
         </div>
-
         <form className="auth-form" onSubmit={(event) => void submit(event)}>
           <div className="auth-switch">
             <button type="button" className={mode === "login" ? "tab-button active" : "tab-button"} onClick={() => setMode("login")}>
@@ -185,14 +188,6 @@ function AuthScreen({
                 ? t(locale, "Войти", "Sign in")
                 : t(locale, "Создать аккаунт", "Create account")}
           </button>
-
-          <p className="auth-note">
-            {t(
-              locale,
-              "Первый зарегистрированный аккаунт автоматически становится владельцем и получает доступ к админке.",
-              "The first registered account automatically becomes the owner and gets admin access.",
-            )}
-          </p>
         </form>
       </section>
     </div>
@@ -236,6 +231,16 @@ export default function App() {
   const [providerSettings, setProviderSettings] = useState<Omit<ProviderSettings, "configured">>(emptyProviderSettings);
   const [providerConfigured, setProviderConfigured] = useState<Record<string, boolean>>({});
   const [providerSaving, setProviderSaving] = useState(false);
+  const [adminUserSaving, setAdminUserSaving] = useState(false);
+  const [adminUserFilter, setAdminUserFilter] = useState("");
+  const [adminUserForm, setAdminUserForm] = useState({
+    username: "",
+    password: "",
+    role: "user",
+    status: "approved",
+    language: "ru" as Locale,
+    max_domains: "",
+  });
 
   useEffect(() => {
     void bootstrap();
@@ -323,11 +328,9 @@ export default function App() {
 
   async function loadWorkspace(currentSession: SessionResponse) {
     await Promise.all([
-      loadHistory(historyDomain, historyDays),
-      loadProxies(),
-      loadWebhooks(),
-      loadWatchlist(),
-      loadRuntime(),
+      ...(currentSession.has_feature_access
+        ? [loadHistory(historyDomain, historyDays), loadProxies(), loadWebhooks(), loadWatchlist(), loadRuntime()]
+        : []),
       ...(currentSession.user.role === "owner" || currentSession.user.role === "admin"
         ? [loadAdminOverview(), loadAdminUsers(), loadProviderSettings()]
         : []),
@@ -431,6 +434,8 @@ export default function App() {
   async function handleLogout() {
     try {
       await api.logout();
+    } catch (error) {
+      setToast({ type: "error", text: error instanceof Error ? error.message : t(locale, "Ошибка выхода.", "Logout failed.") });
     } finally {
       setSession(null);
       setJob(null);
@@ -631,10 +636,43 @@ export default function App() {
     }
   }
 
-  async function updateUserStatus(userId: number, payload: Partial<Pick<AdminUser, "status" | "role">>) {
+  async function handleAdminUserCreate(event: FormEvent) {
+    event.preventDefault();
+    setAdminUserSaving(true);
+    try {
+      await api.createAdminUser({
+        username: adminUserForm.username,
+        password: adminUserForm.password,
+        role: adminUserForm.role,
+        status: adminUserForm.status,
+        language: adminUserForm.language,
+        max_domains: adminUserForm.max_domains ? Number(adminUserForm.max_domains) : null,
+        status_message: adminUserForm.status === "pending" ? t(locale, "Ожидает подтверждения администратора.", "Pending administrator approval.") : null,
+      });
+      setAdminUserForm({
+        username: "",
+        password: "",
+        role: "user",
+        status: "approved",
+        language: locale,
+        max_domains: "",
+      });
+      setToast({ type: "success", text: t(locale, "Пользователь создан.", "User created.") });
+      await Promise.all([loadAdminUsers(), loadAdminOverview()]);
+    } catch (error) {
+      setToast({ type: "error", text: error instanceof Error ? error.message : t(locale, "Не удалось создать пользователя.", "Failed to create user.") });
+    } finally {
+      setAdminUserSaving(false);
+    }
+  }
+
+  async function updateUserStatus(
+    userId: number,
+    payload: Partial<Pick<AdminUser, "status" | "role" | "language" | "max_domains" | "status_message">>,
+  ) {
     try {
       await api.updateAdminUser(userId, payload);
-      await loadAdminUsers();
+      await Promise.all([loadAdminUsers(), loadAdminOverview()]);
     } catch (error) {
       setToast({ type: "error", text: error instanceof Error ? error.message : t(locale, "Ошибка обновления пользователя.", "Failed to update user.") });
     }
@@ -669,9 +707,14 @@ export default function App() {
     const query = watchFilter.trim().toLowerCase();
     return watchlist.filter((item) => !query || item.domain.toLowerCase().includes(query));
   }, [watchlist, watchFilter]);
+  const filteredAdminUsers = useMemo(() => {
+    const query = adminUserFilter.trim().toLowerCase();
+    return adminUsers.filter((item) => !query || item.username.toLowerCase().includes(query));
+  }, [adminUsers, adminUserFilter]);
 
   const currentAverageRisk = averageRisk(reports);
   const currentTopRisk = filteredReports[0]?.risk_score ?? reports[0]?.risk_score ?? 0;
+  const exportJobId = job?.job_id ?? activeJobId ?? history[0]?.job_id ?? null;
 
   if (bootLoading) {
     return <div className="splash-screen">Loading...</div>;
@@ -681,7 +724,7 @@ export default function App() {
     return (
       <>
         {toast ? <div className={`toast floating ${toast.type}`}>{toast.text}</div> : null}
-        <AuthScreen locale={locale} onLogin={handleLogin} onRegister={handleRegister} authLoading={authLoading} />
+        <AuthScreen locale={locale} onLogin={handleLogin} onRegister={handleRegister} onLocaleChange={setLocale} authLoading={authLoading} />
       </>
     );
   }
@@ -690,7 +733,6 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">{t(locale, "Изолированные аккаунты и глобальная админка", "Isolated users and global admin")}</p>
           <h1>Domain Blacklist Checker</h1>
         </div>
         <div className="topbar-actions">
@@ -719,6 +761,9 @@ export default function App() {
           <p>{session.user.status_message || t(locale, "Обратись к администратору.", "Contact an administrator.")}</p>
         </div>
       ) : null}
+
+      {!session.has_feature_access ? null : (
+      <>
 
       <section className="hero dashboard-grid">
         <div className="results-top">
@@ -919,10 +964,11 @@ export default function App() {
           <div className="card">
             <h2>{t(locale, "Экспорт", "Exports")}</h2>
             <div className="actions">
-              <a className={`button-link ${!activeJobId ? "disabled-link" : ""}`} href={activeJobId ? api.reportUrl(activeJobId, "json") : "#"}>JSON</a>
-              <a className={`button-link ghost-link ${!activeJobId ? "disabled-link" : ""}`} href={activeJobId ? api.reportUrl(activeJobId, "csv") : "#"}>CSV</a>
-              <a className={`button-link ghost-link ${!activeJobId ? "disabled-link" : ""}`} href={activeJobId ? api.reportUrl(activeJobId, "pdf") : "#"}>PDF</a>
+              <a className={`button-link ${!exportJobId ? "disabled-link" : ""}`} href={exportJobId ? api.reportUrl(exportJobId, "json") : "#"}>JSON</a>
+              <a className={`button-link ghost-link ${!exportJobId ? "disabled-link" : ""}`} href={exportJobId ? api.reportUrl(exportJobId, "csv") : "#"}>CSV</a>
+              <a className={`button-link ghost-link ${!exportJobId ? "disabled-link" : ""}`} href={exportJobId ? api.reportUrl(exportJobId, "pdf") : "#"}>PDF</a>
             </div>
+            {!exportJobId ? <p className="muted">{t(locale, "Экспорт появится после первой проверки.", "Exports become available after the first scan.")}</p> : null}
           </div>
         </div>
       </section>
@@ -940,8 +986,7 @@ export default function App() {
           <div className="tab-panel">
             <div className="card-head">
               <div>
-                <h2>{t(locale, "Личная история проверок", "Personal check history")}</h2>
-                <p className="muted">{t(locale, "Здесь только твои чеки. Чужие задачи и история не видны.", "Only your own jobs are shown here. Other users remain hidden.")}</p>
+                <h2>{t(locale, "История проверок", "Check history")}</h2>
               </div>
             </div>
             <form className="filter-row" onSubmit={(event) => { event.preventDefault(); void loadHistory(historyDomain, historyDays); }}>
@@ -1005,7 +1050,7 @@ export default function App() {
 
         {activeTab === "webhooks" ? (
           <div className="tab-panel">
-            <div className="card-head"><div><h2>Webhooks</h2><p className="muted">{t(locale, "Webhook-и тоже отдельные по пользователю.", "Webhooks are isolated per user as well.")}</p></div></div>
+            <div className="card-head"><div><h2>Webhooks</h2></div></div>
             <form className="filter-row" onSubmit={(event) => void handleWebhookSubmit(event)}>
               <label><span>URL</span><input value={webhookUrl} onChange={(event) => setWebhookUrl(event.target.value)} placeholder="https://example.com/webhooks/domain-checker" /></label>
               <label><span>{t(locale, "События", "Events")}</span><input value={webhookEvents} onChange={(event) => setWebhookEvents(event.target.value)} /></label>
@@ -1035,7 +1080,53 @@ export default function App() {
               </div>
             </div>
             <div className="card inset-card">
-              <div className="card-head"><div><h2>{t(locale, "Глобальные API и интеграции", "Global APIs and integrations")}</h2><p className="muted">{t(locale, "Эти ключи и URL работают для всех зарегистрированных пользователей сразу.", "These keys and endpoints apply to all registered users immediately.")}</p></div></div>
+              <div className="card-head">
+                <div>
+                  <h2>{t(locale, "Создать пользователя", "Create user")}</h2>
+                </div>
+              </div>
+              <form className="form provider-form" onSubmit={(event) => void handleAdminUserCreate(event)}>
+                <label>
+                  <span>{t(locale, "Логин", "Username")}</span>
+                  <input value={adminUserForm.username} onChange={(event) => setAdminUserForm((current) => ({ ...current, username: event.target.value }))} />
+                </label>
+                <label>
+                  <span>{t(locale, "Пароль", "Password")}</span>
+                  <input type="password" value={adminUserForm.password} onChange={(event) => setAdminUserForm((current) => ({ ...current, password: event.target.value }))} />
+                </label>
+                <label>
+                  <span>{t(locale, "Роль", "Role")}</span>
+                  <select value={adminUserForm.role} onChange={(event) => setAdminUserForm((current) => ({ ...current, role: event.target.value }))}>
+                    <option value="user">user</option>
+                    <option value="admin">admin</option>
+                  </select>
+                </label>
+                <label>
+                  <span>{t(locale, "Статус", "Status")}</span>
+                  <select value={adminUserForm.status} onChange={(event) => setAdminUserForm((current) => ({ ...current, status: event.target.value }))}>
+                    <option value="approved">{t(locale, "Активен", "Approved")}</option>
+                    <option value="pending">{t(locale, "Ожидает", "Pending")}</option>
+                    <option value="blocked">{t(locale, "Заблокирован", "Blocked")}</option>
+                  </select>
+                </label>
+                <label>
+                  <span>{t(locale, "Язык", "Language")}</span>
+                  <select value={adminUserForm.language} onChange={(event) => setAdminUserForm((current) => ({ ...current, language: event.target.value as Locale }))}>
+                    <option value="ru">RU</option>
+                    <option value="en">EN</option>
+                  </select>
+                </label>
+                <label>
+                  <span>{t(locale, "Лимит доменов", "Domain limit")}</span>
+                  <input value={adminUserForm.max_domains} onChange={(event) => setAdminUserForm((current) => ({ ...current, max_domains: event.target.value }))} placeholder="1000" />
+                </label>
+                <button type="submit" disabled={adminUserSaving}>
+                  {adminUserSaving ? t(locale, "Создание...", "Creating...") : t(locale, "Создать пользователя", "Create user")}
+                </button>
+              </form>
+            </div>
+            <div className="card inset-card">
+              <div className="card-head"><div><h2>{t(locale, "Глобальные API и интеграции", "Global APIs and integrations")}</h2></div></div>
               <form className="form provider-form" onSubmit={(event) => void saveProviderSettings(event)}>
                 <label><span>Google Safe Browsing API key</span><input value={providerSettings.google_safe_browsing_api_key ?? ""} onChange={(event) => setProviderSettings((current) => ({ ...current, google_safe_browsing_api_key: event.target.value }))} /></label>
                 <label><span>Lumen Search URL</span><input value={providerSettings.lumen_search_url ?? ""} onChange={(event) => setProviderSettings((current) => ({ ...current, lumen_search_url: event.target.value }))} /></label>
@@ -1052,18 +1143,52 @@ export default function App() {
               <div className="pill-row">{Object.entries(providerConfigured).map(([key, enabled]) => <span key={key} className={`muted-chip ${enabled ? "chip-enabled" : ""}`}>{key}: {enabled ? t(locale, "готово", "ready") : t(locale, "нет", "off")}</span>)}</div>
             </div>
             <div className="card inset-card admin-users-card">
-              <div className="card-head"><div><h2>{t(locale, "Пользователи", "Users")}</h2><p className="muted">{t(locale, "Можно менять роли и статусы. Данные пользователей остаются разделёнными.", "You can change roles and statuses. User data remains isolated.")}</p></div></div>
+              <div className="card-head">
+                <div>
+                  <h2>{t(locale, "Пользователи", "Users")}</h2>
+                </div>
+                <label className="admin-filter">
+                  <span>{t(locale, "Поиск", "Search")}</span>
+                  <input value={adminUserFilter} onChange={(event) => setAdminUserFilter(event.target.value)} />
+                </label>
+              </div>
               <div className="table-wrap">
                 <table>
-                  <thead><tr><th>{t(locale, "Логин", "Username")}</th><th>{t(locale, "Роль", "Role")}</th><th>{t(locale, "Статус", "Status")}</th><th>{t(locale, "Ресурсы", "Resources")}</th><th>{t(locale, "Действия", "Actions")}</th></tr></thead>
+                  <thead><tr><th>{t(locale, "Логин", "Username")}</th><th>{t(locale, "Роль", "Role")}</th><th>{t(locale, "Статус", "Status")}</th><th>{t(locale, "Показатели", "Metrics")}</th><th>{t(locale, "Действия", "Actions")}</th></tr></thead>
                   <tbody>
-                    {adminUsers.map((user) => (
+                    {filteredAdminUsers.map((user) => (
                       <tr key={user.id}>
                         <td><strong>{user.username}</strong><div className="table-subtext">{formatDate(locale, user.created_at)}</div></td>
                         <td>{user.role}</td>
-                        <td>{user.status}</td>
+                        <td><StatusBadge status={user.status} locale={locale} /></td>
                         <td>{`${user.job_count} jobs | ${user.proxy_count} proxy | ${user.watch_count} watch`}</td>
-                        <td><div className="actions">{user.role === "user" ? <button type="button" onClick={() => void updateUserStatus(user.id, { role: "admin" })}>{t(locale, "Сделать admin", "Make admin")}</button> : null}{user.status !== "blocked" ? <button type="button" className="ghost-button" onClick={() => void updateUserStatus(user.id, { status: "blocked" })}>{t(locale, "Заблокировать", "Block")}</button> : <button type="button" onClick={() => void updateUserStatus(user.id, { status: "approved" })}>{t(locale, "Разблокировать", "Unblock")}</button>}</div></td>
+                        <td>
+                          <div className="actions">
+                            {user.status === "pending" ? (
+                              <button type="button" onClick={() => void updateUserStatus(user.id, { status: "approved", status_message: null })}>
+                                {t(locale, "Подтвердить", "Approve")}
+                              </button>
+                            ) : null}
+                            {user.role === "user" ? (
+                              <button type="button" onClick={() => void updateUserStatus(user.id, { role: "admin" })}>
+                                {t(locale, "Сделать admin", "Make admin")}
+                              </button>
+                            ) : user.role === "admin" ? (
+                              <button type="button" className="ghost-button" onClick={() => void updateUserStatus(user.id, { role: "user" })}>
+                                {t(locale, "Сделать user", "Make user")}
+                              </button>
+                            ) : null}
+                            {user.status !== "blocked" ? (
+                              <button type="button" className="ghost-button" onClick={() => void updateUserStatus(user.id, { status: "blocked", status_message: t(locale, "Аккаунт заблокирован администратором.", "Account was blocked by an administrator.") })}>
+                                {t(locale, "Заблокировать", "Block")}
+                              </button>
+                            ) : (
+                              <button type="button" onClick={() => void updateUserStatus(user.id, { status: "approved", status_message: null })}>
+                                {t(locale, "Разблокировать", "Unblock")}
+                              </button>
+                            )}
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1073,6 +1198,8 @@ export default function App() {
           </div>
         ) : null}
       </section>
+      </>
+      )}
     </div>
   );
 }

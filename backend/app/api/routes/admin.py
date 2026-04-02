@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.schemas.admin import (
     AdminAuditLogResponse,
     AdminOverviewResponse,
+    AdminUserCreateRequest,
     AdminUserResponse,
     AdminUserUpdateRequest,
     ProviderSettingsRequest,
@@ -19,6 +20,7 @@ from app.schemas.admin import (
 from app.schemas.auth import UserResponse
 from app.services.app_settings import get_provider_settings, update_provider_settings
 from app.services.audit import add_audit_log
+from app.services.security import hash_password
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -107,6 +109,39 @@ async def list_users(
             )
         )
     return items
+
+
+@router.post("/users", response_model=UserResponse)
+async def create_user(
+    payload: AdminUserCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+) -> UserResponse:
+    username = payload.username.strip().lower()
+    result = await db.execute(select(User).where(User.username == username))
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    user = User(
+        username=username,
+        password_hash=hash_password(payload.password),
+        role=payload.role,
+        status=payload.status,
+        language=payload.language,
+        max_domains=payload.max_domains,
+        status_message=payload.status_message,
+    )
+    db.add(user)
+    await add_audit_log(
+        db,
+        actor_user_id=admin.id,
+        target_user_id=None,
+        action="user_create",
+        details=f"username={username} role={payload.role} status={payload.status}",
+    )
+    await db.commit()
+    await db.refresh(user)
+    return UserResponse.model_validate(user)
 
 
 @router.patch("/users/{user_id}", response_model=UserResponse)

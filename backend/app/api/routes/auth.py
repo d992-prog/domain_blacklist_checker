@@ -66,13 +66,15 @@ async def register(
 
     total_users = int(await db.scalar(select(func.count(User.id))) or 0)
     role = "owner" if total_users == 0 else "user"
+    status_value = "approved" if role == "owner" else "pending"
+    status_message = None if role == "owner" else get_settings().default_pending_message
     user = User(
         username=username,
         password_hash=hash_password(payload.password),
         role=role,
-        status="approved",
+        status=status_value,
         language=payload.language if payload.language in {"ru", "en"} else "ru",
-        status_message=None,
+        status_message=status_message,
     )
     db.add(user)
     await db.commit()

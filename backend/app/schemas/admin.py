@@ -3,6 +3,16 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class AdminUserCreateRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_-]+$")
+    password: str = Field(min_length=6, max_length=128)
+    role: str = "user"
+    status: str = "approved"
+    language: str = "ru"
+    max_domains: int | None = Field(default=None, ge=1)
+    status_message: str | None = None
+
+
 class AdminUserUpdateRequest(BaseModel):
     status: str | None = None
     status_message: str | None = None

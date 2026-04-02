@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import require_admin, require_feature_access
 from app.core.config import get_settings
 from app.db.models import CheckJob, DomainReport, ProxyEndpoint, User, WatchlistItem
 from app.db.session import get_db
@@ -59,7 +59,7 @@ async def monitoring_health(
 @router.get("/runtime")
 async def runtime_summary(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> dict[str, object]:
     settings = get_settings()
     settings_map = await get_provider_settings(db)

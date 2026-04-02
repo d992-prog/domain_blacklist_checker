@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import require_feature_access
 from app.db.models import User, WatchlistItem
 from app.db.session import get_db
 from app.schemas.watchlist import WatchlistCreateRequest, WatchlistResponse, WatchlistUpdateRequest
@@ -34,7 +34,7 @@ def serialize_watchlist(item: WatchlistItem) -> WatchlistResponse:
 @router.get("", response_model=list[WatchlistResponse])
 async def list_watchlist(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> list[WatchlistResponse]:
     result = await db.execute(
         select(WatchlistItem)
@@ -48,7 +48,7 @@ async def list_watchlist(
 async def create_watchlist_item(
     payload: WatchlistCreateRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> WatchlistResponse:
     domain = normalize_domain(payload.domain)
     if not domain:
@@ -84,7 +84,7 @@ async def update_watchlist_item(
     watch_id: int,
     payload: WatchlistUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> WatchlistResponse:
     result = await db.execute(
         select(WatchlistItem).where(WatchlistItem.id == watch_id, WatchlistItem.owner_id == user.id)
@@ -113,7 +113,7 @@ async def run_watchlist_item_now(
     watch_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> WatchlistResponse:
     runner = request.app.state.job_runner
     result = await db.execute(
@@ -134,7 +134,7 @@ async def run_watchlist_item_now(
 async def delete_watchlist_item(
     watch_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> dict[str, str]:
     result = await db.execute(
         select(WatchlistItem).where(WatchlistItem.id == watch_id, WatchlistItem.owner_id == user.id)

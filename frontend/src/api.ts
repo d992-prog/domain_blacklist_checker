@@ -172,6 +172,16 @@ export type AdminUser = {
   watch_count: number;
 };
 
+export type AdminUserCreateRequest = {
+  username: string;
+  password: string;
+  role: string;
+  status: string;
+  language: "ru" | "en";
+  max_domains: number | null;
+  status_message: string | null;
+};
+
 export type ProviderSettings = {
   google_safe_browsing_api_key: string | null;
   lumen_search_url: string | null;
@@ -317,6 +327,11 @@ export const api = {
   getRuntimeSummary: () => request<RuntimeSummary>("/health/runtime"),
   getAdminOverview: () => request<AdminOverview>("/admin/overview"),
   getAdminUsers: () => request<AdminUser[]>("/admin/users"),
+  createAdminUser: (payload: AdminUserCreateRequest) =>
+    request<User>("/admin/users", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   updateAdminUser: (id: number, payload: Partial<Pick<AdminUser, "status" | "role" | "language" | "max_domains" | "status_message">>) =>
     request<User>(`/admin/users/${id}`, {
       method: "PATCH",

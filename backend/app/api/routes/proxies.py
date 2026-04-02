@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import require_feature_access
 from app.db.models import ProxyEndpoint, User
 from app.db.session import get_db
 from app.schemas.proxies import ProxyCreateRequest, ProxyResponse, ProxyUpdateRequest
@@ -41,7 +41,7 @@ def serialize_proxy(proxy: ProxyEndpoint) -> ProxyResponse:
 @router.get("", response_model=list[ProxyResponse])
 async def list_proxies(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> list[ProxyResponse]:
     result = await db.execute(
         select(ProxyEndpoint)
@@ -55,7 +55,7 @@ async def list_proxies(
 async def create_proxy(
     payload: ProxyCreateRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> ProxyResponse:
     try:
         parsed = parse_proxy_url(payload.proxy_url)
@@ -74,7 +74,7 @@ async def update_proxy(
     proxy_id: int,
     payload: ProxyUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> ProxyResponse:
     result = await db.execute(
         select(ProxyEndpoint).where(ProxyEndpoint.id == proxy_id, ProxyEndpoint.owner_id == user.id)
@@ -92,7 +92,7 @@ async def update_proxy(
 async def delete_proxy(
     proxy_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_feature_access),
 ) -> dict[str, str]:
     result = await db.execute(
         select(ProxyEndpoint).where(ProxyEndpoint.id == proxy_id, ProxyEndpoint.owner_id == user.id)
