@@ -5,7 +5,7 @@ import hmac
 import secrets
 from datetime import timedelta
 
-from app.db.base import utcnow
+from app.db.base import ensure_utc, utcnow
 
 PASSWORD_ROUNDS = 310_000
 SESSION_COOKIE_NAME = "frdm_session"
@@ -54,4 +54,7 @@ def user_has_feature_access(user) -> bool:
         return False
     if user.access_expires_at is None:
         return True
-    return user.access_expires_at > utcnow()
+    access_expires_at = ensure_utc(user.access_expires_at)
+    if access_expires_at is None:
+        return True
+    return access_expires_at > utcnow()
