@@ -182,6 +182,13 @@ h4 {
   margin-bottom: 6px;
 }
 
+.label-with-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .admin-grid {
   grid-template-columns: 1fr;
 }
@@ -198,6 +205,10 @@ h4 {
 
 .result-side {
   justify-items: end;
+}
+
+.pill-with-hint {
+  display: inline-flex;
 }
 
 .report-card {
@@ -362,13 +373,30 @@ button,
 }
 
 .risk-ring {
+  --risk-percent: 0%;
+  --risk-color: rgba(117, 97, 74, 0.15);
   min-width: 100px;
   min-height: 100px;
   display: grid;
   place-items: center;
+  position: relative;
   border-radius: 50%;
-  border: 10px solid rgba(117, 97, 74, 0.15);
+  background: conic-gradient(var(--risk-color) var(--risk-percent), rgba(117, 97, 74, 0.12) 0);
   text-align: center;
+  overflow: hidden;
+}
+
+.risk-ring::before {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border-radius: 50%;
+  background: rgba(255, 250, 242, 0.95);
+}
+
+.risk-ring > * {
+  position: relative;
+  z-index: 1;
 }
 
 .risk-ring strong {
@@ -383,18 +411,6 @@ button,
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--muted);
-}
-
-.tone-clean {
-  border-color: rgba(31, 122, 70, 0.22);
-}
-
-.tone-warning {
-  border-color: rgba(183, 122, 28, 0.22);
-}
-
-.tone-listed {
-  border-color: rgba(178, 59, 42, 0.22);
 }
 
 .detail-grid {
@@ -427,6 +443,7 @@ button,
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .table-wrap {
@@ -489,6 +506,10 @@ th {
   justify-content: center;
 }
 
+.history-filter-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+}
+
 .auth-form {
   align-content: start;
   min-height: 320px;
@@ -520,11 +541,12 @@ th {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  margin-left: 6px;
   font-size: 0.75rem;
   background: rgba(183, 93, 45, 0.14);
   color: var(--accent-strong);
   cursor: help;
+  vertical-align: middle;
+  flex-shrink: 0;
 }
 
 .toast {
@@ -557,6 +579,15 @@ th {
 
 .admin-filter {
   min-width: 220px;
+}
+
+.provider-card p,
+.history-row p,
+.table-subtext,
+td,
+th {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .empty-block {

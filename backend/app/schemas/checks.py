@@ -94,6 +94,7 @@ class JobReportBundle(BaseModel):
 
 
 class HistoryItem(BaseModel):
+    id: int
     job_id: str
     domain: str
     overall_status: str

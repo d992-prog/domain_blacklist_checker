@@ -186,6 +186,19 @@ async def get_history(
     return await runner.get_history(user.id, normalized, days)
 
 
+@router.delete("/history/{report_id}")
+async def delete_history_item(
+    report_id: int,
+    request: Request,
+    user: User = Depends(require_feature_access),
+) -> dict[str, str]:
+    runner = get_job_runner(request)
+    deleted = await runner.delete_history_item(user.id, report_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="History item not found")
+    return {"detail": "History item deleted"}
+
+
 @router.post("/webhook", response_model=WebhookResponse)
 async def create_webhook(
     payload: WebhookRequest,

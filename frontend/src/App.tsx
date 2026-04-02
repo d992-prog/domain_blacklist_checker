@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, type CSSProperties, useEffect, useMemo, useState } from "react";
 
 import {
   AdminOverview,
@@ -17,7 +17,7 @@ import {
 
 type Locale = "ru" | "en";
 type Toast = { type: "success" | "error"; text: string } | null;
-type TabKey = "history" | "watchlist" | "proxies" | "webhooks" | "admin";
+type TabKey = "guide" | "history" | "watchlist" | "proxies" | "webhooks" | "admin";
 
 const emptyProviderSettings: Omit<ProviderSettings, "configured"> = {
   google_safe_browsing_api_key: "",
@@ -62,6 +62,12 @@ function scoreTone(score: number) {
   return "clean";
 }
 
+function riskRingColor(score: number) {
+  if (score >= 60) return "#b23b2a";
+  if (score > 0) return "#b77a1c";
+  return "#1f7a46";
+}
+
 function metricValue(reports: DomainReport[], mode: "listed" | "warning" | "clean") {
   return reports.filter((report) => report.overall_status === mode).length;
 }
@@ -88,6 +94,43 @@ function Hint({ text }: { text: string }) {
       ?
     </span>
   );
+}
+
+function LabelWithHint({ label, hint }: { label: string; hint?: string }) {
+  return (
+    <span className="label-with-hint">
+      {label}
+      {hint ? <Hint text={hint} /> : null}
+    </span>
+  );
+}
+
+function InfoPill({ label, value, hint }: { label: string; value: string; hint: string }) {
+  return (
+    <span className="muted-chip pill-with-hint">
+      <LabelWithHint label={`${label} ${value}`} hint={hint} />
+    </span>
+  );
+}
+
+function downloadText(filename: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function buildHistoryCsv(history: HistoryItem[]) {
+  const rows = [
+    ["domain", "job_id", "status", "risk_score", "checked_at"],
+    ...history.map((item) => [item.domain, item.job_id, item.overall_status, String(item.risk_score), item.checked_at]),
+  ];
+  return rows.map((row) => row.map((cell) => `"${cell.replaceAll('"', '""')}"`).join(",")).join("\n");
 }
 
 function StatusBadge({ status, locale }: { status: string; locale: Locale }) {
@@ -205,13 +248,14 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [job, setJob] = useState<JobStatusResponse | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [expandedDomain, setExpandedDomain] = useState<string | null>(null);
+  const [expandedDomains, setExpandedDomains] = useState<string[]>([]);
   const [resultQuery, setResultQuery] = useState("");
   const [resultStatus, setResultStatus] = useState("all");
   const [resultSort, setResultSort] = useState("risk");
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyDomain, setHistoryDomain] = useState("");
   const [historyDays, setHistoryDays] = useState("30");
+  const [historyLimit, setHistoryLimit] = useState("50");
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyStatusFilter, setHistoryStatusFilter] = useState("all");
   const [proxyUrl, setProxyUrl] = useState("");
@@ -233,6 +277,8 @@ export default function App() {
   const [providerSaving, setProviderSaving] = useState(false);
   const [adminUserSaving, setAdminUserSaving] = useState(false);
   const [adminUserFilter, setAdminUserFilter] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [adminPasswordSaving, setAdminPasswordSaving] = useState(false);
   const [adminUserForm, setAdminUserForm] = useState({
     username: "",
     password: "",
@@ -240,6 +286,14 @@ export default function App() {
     status: "approved",
     language: "ru" as Locale,
     max_domains: "",
+  });
+  const [passwordForm, setPasswordForm] = useState({
+    current_password: "",
+    new_password: "",
+  });
+  const [adminPasswordForm, setAdminPasswordForm] = useState({
+    user_id: "",
+    password: "",
   });
 
   useEffect(() => {
@@ -264,10 +318,9 @@ export default function App() {
         const status = await api.getStatus(activeJobId);
         if (cancelled) return;
         setJob(status);
-        if (status.reports.length && !expandedDomain) setExpandedDomain(status.reports[0].domain);
         if (status.status === "completed") {
           setToast({ type: "success", text: t(locale, "Проверка завершена.", "Scan completed.") });
-          void loadHistory(historyDomain, historyDays);
+          void loadHistory("", historyDays);
           return;
         }
         if (status.status === "failed") {
@@ -288,10 +341,9 @@ export default function App() {
         const nextStatus = JSON.parse((event as MessageEvent).data) as JobStatusResponse;
         if (cancelled) return;
         setJob(nextStatus);
-        if (nextStatus.reports.length && !expandedDomain) setExpandedDomain(nextStatus.reports[0].domain);
         if (nextStatus.status === "completed") {
           setToast({ type: "success", text: t(locale, "Проверка завершена.", "Scan completed.") });
-          void loadHistory(historyDomain, historyDays);
+          void loadHistory("", historyDays);
           source?.close();
         }
         if (nextStatus.status === "failed") {
@@ -312,7 +364,7 @@ export default function App() {
       if (fallbackTimer) window.clearTimeout(fallbackTimer);
       source?.close();
     };
-  }, [activeJobId, session, expandedDomain, historyDomain, historyDays, locale]);
+  }, [activeJobId, session, historyDays, locale]);
 
   async function bootstrap() {
     try {
@@ -329,7 +381,7 @@ export default function App() {
   async function loadWorkspace(currentSession: SessionResponse) {
     await Promise.all([
       ...(currentSession.has_feature_access
-        ? [loadHistory(historyDomain, historyDays), loadProxies(), loadWebhooks(), loadWatchlist(), loadRuntime()]
+        ? [loadHistory("", historyDays), loadProxies(), loadWebhooks(), loadWatchlist(), loadRuntime()]
         : []),
       ...(currentSession.user.role === "owner" || currentSession.user.role === "admin"
         ? [loadAdminOverview(), loadAdminUsers(), loadProviderSettings()]
@@ -478,12 +530,12 @@ export default function App() {
           })();
       setActiveJobId(created.job_id);
       setJob(null);
-      setExpandedDomain(null);
+      setExpandedDomains([]);
       setToast({
         type: "success",
         text: t(locale, `Создана задача ${created.job_id} на ${created.total_domains} доменов.`, `Job ${created.job_id} created for ${created.total_domains} domains.`),
       });
-      await loadHistory(historyDomain, historyDays);
+      await loadHistory("", historyDays);
       setActiveTab("history");
     } catch (error) {
       setToast({ type: "error", text: error instanceof Error ? error.message : t(locale, "Не удалось запустить проверку.", "Failed to start scan.") });
@@ -666,6 +718,39 @@ export default function App() {
     }
   }
 
+  async function handlePasswordChange(event: FormEvent) {
+    event.preventDefault();
+    setPasswordSaving(true);
+    try {
+      const nextSession = await api.changePassword(passwordForm.current_password, passwordForm.new_password);
+      setSession(nextSession);
+      setPasswordForm({ current_password: "", new_password: "" });
+      setToast({ type: "success", text: t(locale, "Пароль обновлён.", "Password updated.") });
+    } catch (error) {
+      setToast({ type: "error", text: error instanceof Error ? error.message : t(locale, "Не удалось обновить пароль.", "Failed to update password.") });
+    } finally {
+      setPasswordSaving(false);
+    }
+  }
+
+  async function handleAdminPasswordReset(event: FormEvent) {
+    event.preventDefault();
+    if (!adminPasswordForm.user_id) {
+      setToast({ type: "error", text: t(locale, "Выбери пользователя.", "Select a user.") });
+      return;
+    }
+    setAdminPasswordSaving(true);
+    try {
+      await api.updateAdminUserPassword(Number(adminPasswordForm.user_id), adminPasswordForm.password);
+      setAdminPasswordForm({ user_id: "", password: "" });
+      setToast({ type: "success", text: t(locale, "Пароль пользователя обновлён.", "User password updated.") });
+    } catch (error) {
+      setToast({ type: "error", text: error instanceof Error ? error.message : t(locale, "Не удалось обновить пароль пользователя.", "Failed to update user password.") });
+    } finally {
+      setAdminPasswordSaving(false);
+    }
+  }
+
   async function updateUserStatus(
     userId: number,
     payload: Partial<Pick<AdminUser, "status" | "role" | "language" | "max_domains" | "status_message">>,
@@ -676,6 +761,46 @@ export default function App() {
     } catch (error) {
       setToast({ type: "error", text: error instanceof Error ? error.message : t(locale, "Ошибка обновления пользователя.", "Failed to update user.") });
     }
+  }
+
+  function toggleExpandedDomain(domain: string) {
+    setExpandedDomains((current) =>
+      current.includes(domain) ? current.filter((item) => item !== domain) : [...current, domain],
+    );
+  }
+
+  async function openHistoryDetails(item: HistoryItem) {
+    try {
+      const status = await api.getStatus(item.job_id);
+      setJob(status);
+      setActiveJobId(item.job_id);
+      setExpandedDomains([item.domain]);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (error) {
+      setToast({ type: "error", text: error instanceof Error ? error.message : t(locale, "Не удалось открыть детали истории.", "Failed to open history details.") });
+    }
+  }
+
+  async function removeHistoryItem(itemId: number) {
+    try {
+      await api.deleteHistory(itemId);
+      await loadHistory("", historyDays);
+      setToast({ type: "success", text: t(locale, "Запись истории удалена.", "History item deleted.") });
+    } catch (error) {
+      setToast({ type: "error", text: error instanceof Error ? error.message : t(locale, "Не удалось удалить запись истории.", "Failed to delete history item.") });
+    }
+  }
+
+  function exportHistoryJson(items: HistoryItem[]) {
+    downloadText(
+      "history-export.json",
+      JSON.stringify(items, null, 2),
+      "application/json;charset=utf-8",
+    );
+  }
+
+  function exportHistoryCsv(items: HistoryItem[]) {
+    downloadText("history-export.csv", buildHistoryCsv(items), "text/csv;charset=utf-8");
   }
 
   const reports = job?.reports ?? [];
@@ -695,10 +820,16 @@ export default function App() {
     return sorted;
   }, [reports, resultQuery, resultSort, resultStatus]);
 
-  const filteredHistory = useMemo(
-    () => history.filter((item) => historyStatusFilter === "all" || item.overall_status === historyStatusFilter),
-    [history, historyStatusFilter],
-  );
+  const filteredHistory = useMemo(() => {
+    const query = historyDomain.trim().toLowerCase();
+    const filtered = history.filter((item) => {
+      if (historyStatusFilter !== "all" && item.overall_status !== historyStatusFilter) return false;
+      if (query && !item.domain.toLowerCase().includes(query)) return false;
+      return true;
+    });
+    const limit = Math.max(Number(historyLimit) || filtered.length, 1);
+    return filtered.slice(0, limit);
+  }, [history, historyStatusFilter, historyDomain, historyLimit]);
   const filteredProxies = useMemo(() => {
     const query = proxyFilter.trim().toLowerCase();
     return proxies.filter((item) => !query || item.display_url.toLowerCase().includes(query));
@@ -810,7 +941,7 @@ export default function App() {
           {!filteredReports.length ? <p className="empty-block">{t(locale, "Результатов пока нет. Запусти проверку справа.", "No results yet. Start a scan on the right.")}</p> : null}
           <div className="result-stack">
             {filteredReports.map((report) => {
-              const expanded = expandedDomain === report.domain;
+              const expanded = expandedDomains.includes(report.domain);
               const listedBlacklists = report.blacklists.filter((item) => item.listed);
               const virusTotal = findProvider(report, "VirusTotal");
               const phishTank = findProvider(report, "PhishTank");
@@ -829,19 +960,27 @@ export default function App() {
                         {t(locale, "Проверено", "Checked")} {formatDate(locale, report.checked_at)} | DNSBL {listedBlacklists.length} | Safe Browsing {report.safe_browsing.status}
                       </p>
                       <div className="pill-row">
-                        <span className="muted-chip">SPF {report.email_auth.spf}</span>
-                        <span className="muted-chip">DKIM {report.email_auth.dkim}</span>
-                        <span className="muted-chip">DMARC {report.email_auth.dmarc}</span>
-                        <span className="muted-chip">VT {virusTotal?.status ?? "unknown"}</span>
-                        <span className="muted-chip">PhishTank {phishTank?.status ?? "unknown"}</span>
+                        <InfoPill label="SPF" value={report.email_auth.spf} hint={t(locale, "Показывает, найден ли SPF-запись домена для почтовой аутентификации.", "Shows whether an SPF record was found for email authentication.")} />
+                        <InfoPill label="DKIM" value={report.email_auth.dkim} hint={t(locale, "Показывает, найден ли DKIM у стандартных селекторов домена.", "Shows whether DKIM was found on common selectors for the domain.")} />
+                        <InfoPill label="DMARC" value={report.email_auth.dmarc} hint={t(locale, "Показывает, есть ли DMARC-политика для домена.", "Shows whether the domain has a DMARC policy.")} />
+                        <InfoPill label="VT" value={virusTotal?.status ?? "unknown"} hint={t(locale, "Сводка репутации домена по данным VirusTotal.", "Domain reputation summary from VirusTotal.")} />
+                        <InfoPill label="PhishTank" value={phishTank?.status ?? "unknown"} hint={t(locale, "Проверка домена на фишинговые совпадения через PhishTank.", "Checks the domain for phishing matches through PhishTank.")} />
                       </div>
                     </div>
                     <div className="result-side">
-                      <div className={`risk-ring tone-${scoreTone(report.risk_score)}`}>
+                      <div
+                        className={`risk-ring tone-${scoreTone(report.risk_score)}`}
+                        style={
+                          {
+                            "--risk-percent": `${report.risk_score}%`,
+                            "--risk-color": riskRingColor(report.risk_score),
+                          } as CSSProperties
+                        }
+                      >
                         <strong>{report.risk_score}</strong>
                         <span>risk</span>
                       </div>
-                      <button type="button" className="ghost-button" onClick={() => setExpandedDomain(expanded ? null : report.domain)}>
+                      <button type="button" className="ghost-button" onClick={() => toggleExpandedDomain(report.domain)}>
                         {expanded ? t(locale, "Скрыть", "Hide") : t(locale, "Подробнее", "Details")}
                       </button>
                     </div>
@@ -855,13 +994,13 @@ export default function App() {
                           <Hint text={t(locale, "Если видишь unknown, значит ключ не настроен или источник не ответил.", "If you see unknown, the key is missing or the provider did not answer.")} />
                         </h4>
                         <div className="provider-grid">
-                          <div className="provider-card"><span>Safe Browsing</span><strong>{report.safe_browsing.status}</strong><p>{report.safe_browsing.note ?? t(locale, "Совпадений нет.", "No matches found.")}</p></div>
-                          <div className="provider-card"><span>VirusTotal</span><strong>{virusTotal?.status ?? "unknown"}</strong><p>{virusTotal?.note ?? t(locale, "Нет данных.", "No data.")}</p></div>
-                          <div className="provider-card"><span>PhishTank</span><strong>{phishTank?.status ?? "unknown"}</strong><p>{phishTank?.note ?? t(locale, "Нет данных.", "No data.")}</p></div>
-                          <div className="provider-card"><span>AbuseIPDB</span><strong>{abuseIpdb?.status ?? "unknown"}</strong><p>{abuseIpdb?.note ?? t(locale, "Нет данных.", "No data.")}</p></div>
-                          <div className="provider-card"><span>URLhaus</span><strong>{urlhaus?.status ?? "unknown"}</strong><p>{urlhaus?.note ?? t(locale, "Нет данных.", "No data.")}</p></div>
-                          <div className="provider-card"><span>Cisco Talos</span><strong>{talos?.status ?? "unknown"}</strong><p>{talos?.note ?? t(locale, "Нет данных.", "No data.")}</p></div>
-                          <div className="provider-card"><span>Lumen</span><strong>{report.lumen.total_notices}</strong><p>{report.lumen.note ?? t(locale, "Уведомлений не найдено.", "No notices found.")}</p></div>
+                          <div className="provider-card"><LabelWithHint label="Safe Browsing" hint={t(locale, "Google-проверка домена на malware, phishing и unwanted software.", "Google domain check for malware, phishing, and unwanted software.")} /><strong>{report.safe_browsing.status}</strong><p>{report.safe_browsing.note ?? t(locale, "Совпадений нет.", "No matches found.")}</p></div>
+                          <div className="provider-card"><LabelWithHint label="VirusTotal" hint={t(locale, "Репутация домена по агрегированным антивирусным и reputation-источникам.", "Domain reputation from aggregated antivirus and reputation sources.")} /><strong>{virusTotal?.status ?? "unknown"}</strong><p>{virusTotal?.note ?? t(locale, "Нет данных.", "No data.")}</p></div>
+                          <div className="provider-card"><LabelWithHint label="PhishTank" hint={t(locale, "Проверка на известные фишинговые совпадения.", "Checks for known phishing matches.")} /><strong>{phishTank?.status ?? "unknown"}</strong><p>{phishTank?.note ?? t(locale, "Нет данных.", "No data.")}</p></div>
+                          <div className="provider-card"><LabelWithHint label="AbuseIPDB" hint={t(locale, "Оценка злоупотреблений по IP-адресу домена.", "Abuse reputation estimate for the domain IP address.")} /><strong>{abuseIpdb?.status ?? "unknown"}</strong><p>{abuseIpdb?.note ?? t(locale, "Нет данных.", "No data.")}</p></div>
+                          <div className="provider-card"><LabelWithHint label="URLhaus" hint={t(locale, "Проверка домена на вредоносные URL и malware-хостинг.", "Checks the domain for malicious URLs and malware hosting.")} /><strong>{urlhaus?.status ?? "unknown"}</strong><p>{urlhaus?.note ?? t(locale, "Нет данных.", "No data.")}</p></div>
+                          <div className="provider-card"><LabelWithHint label="Cisco Talos" hint={t(locale, "Репутация домена через Cisco Talos, если настроен источник.", "Domain reputation through Cisco Talos when a source is configured.")} /><strong>{talos?.status ?? "unknown"}</strong><p>{talos?.note ?? t(locale, "Нет данных.", "No data.")}</p></div>
+                          <div className="provider-card"><LabelWithHint label="Lumen" hint={t(locale, "Юридические notice-сигналы и жалобы по домену.", "Legal notice signals and complaints associated with the domain.")} /><strong>{String(report.lumen.total_notices)}</strong><p>{report.lumen.note ?? t(locale, "Уведомлений не найдено.", "No notices found.")}</p></div>
                         </div>
                         <div className="table-wrap">
                           <table>
@@ -894,9 +1033,9 @@ export default function App() {
                           <Hint text={t(locale, "Risk score собирается из DNSBL, Safe Browsing, reputation providers, Lumen и email auth. Чем выше число, тем выше риск.", "Risk score is built from DNSBL, Safe Browsing, reputation providers, Lumen, and email auth. The higher the number, the higher the risk.")} />
                         </h4>
                         <div className="key-value compact">
-                          <div><span>Risk score <Hint text={t(locale, "Итоговая оценка риска от 0 до 100.", "Final risk score from 0 to 100.")} /></span><strong>{report.risk_score}</strong></div>
-                          <div><span>Runtime <Hint text={t(locale, "Текущие лимиты очереди, прокси и watchlist.", "Current queue, proxy, and watchlist limits.")} /></span><strong>{runtime ? `${runtime.max_parallel_jobs} / ${runtime.watch_scheduler_poll_seconds}s` : "..."}</strong></div>
-                          <div><span>Email auth</span><strong>{`SPF ${report.email_auth.spf}, DKIM ${report.email_auth.dkim}, DMARC ${report.email_auth.dmarc}`}</strong></div>
+                          <div><LabelWithHint label="Risk score" hint={t(locale, "Итоговая оценка риска от 0 до 100 на основе всех проверок.", "Final risk score from 0 to 100 based on all checks.")} /><strong>{report.risk_score}</strong></div>
+                          <div><LabelWithHint label="Runtime" hint={t(locale, "Сводка по очереди, scheduler и сетевой стратегии текущего инстанса.", "Summary of queue, scheduler, and network strategy for the current instance.")} /><strong>{runtime ? `${runtime.max_parallel_jobs} / ${runtime.watch_scheduler_poll_seconds}s` : "..."}</strong></div>
+                          <div><LabelWithHint label="Email auth" hint={t(locale, "Состояние SPF, DKIM и DMARC, которое влияет на доверие и почтовую репутацию домена.", "Status of SPF, DKIM, and DMARC, which influences domain trust and mail reputation.")} /><strong>{`SPF ${report.email_auth.spf}, DKIM ${report.email_auth.dkim}, DMARC ${report.email_auth.dmarc}`}</strong></div>
                         </div>
                         <h4>{t(locale, "Рекомендации", "Recommendations")}</h4>
                         <ul className="recommendation-list">
@@ -954,11 +1093,28 @@ export default function App() {
           <div className="card">
             <h2>Runtime <Hint text={t(locale, "Текущие лимиты очереди, работа прокси, частота watchlist и глобальные провайдеры.", "Current queue limits, proxy behavior, watchlist frequency, and global providers.")} /></h2>
             <div className="key-value compact">
-              <div><span>{t(locale, "HTTP стратегия", "HTTP strategy")}</span><strong>{runtime ? `${runtime.proxy_attempts_per_request} / ${providerStateLabel(locale, runtime.direct_http_fallback)}` : "..."}</strong></div>
-              <div><span>{t(locale, "Очередь", "Queue")}</span><strong>{runtime ? `${runtime.max_parallel_jobs} | ${runtime.check_rate_limit_per_minute}/min` : "..."}</strong></div>
-              <div><span>Watchlist</span><strong>{runtime ? `${runtime.active_watchlist} | ${runtime.watch_scheduler_poll_seconds}s` : "..."}</strong></div>
-              <div><span>{t(locale, "Провайдеры", "Providers")}</span><strong>{runtime ? Object.entries(runtime.configured_providers).filter(([, enabled]) => enabled).map(([key]) => key).join(", ") || t(locale, "ключи не настроены", "no keys configured") : "..."}</strong></div>
+              <div><LabelWithHint label={t(locale, "HTTP стратегия", "HTTP strategy")} hint={t(locale, "Сколько прокси подряд пробуется и разрешён ли прямой запрос без прокси.", "How many proxies are tried in sequence and whether direct requests without a proxy are allowed.")} /><strong>{runtime ? `${runtime.proxy_attempts_per_request} / ${providerStateLabel(locale, runtime.direct_http_fallback)}` : "..."}</strong></div>
+              <div><LabelWithHint label={t(locale, "Очередь", "Queue")} hint={t(locale, "Параллельность задач и лимит создания новых проверок в минуту.", "Parallel job capacity and creation rate limit per minute.")} /><strong>{runtime ? `${runtime.max_parallel_jobs} | ${runtime.check_rate_limit_per_minute}/min` : "..."}</strong></div>
+              <div><LabelWithHint label="Watchlist" hint={t(locale, "Количество активных доменов в мониторинге и интервал опроса планировщика.", "Number of active monitored domains and the scheduler polling interval.")} /><strong>{runtime ? `${runtime.active_watchlist} | ${runtime.watch_scheduler_poll_seconds}s` : "..."}</strong></div>
+              <div><LabelWithHint label={t(locale, "Провайдеры", "Providers")} hint={t(locale, "Какие внешние сервисы сейчас реально включены глобальными ключами.", "Which external services are currently enabled by global credentials.")} /><strong>{runtime ? Object.entries(runtime.configured_providers).filter(([, enabled]) => enabled).map(([key]) => key).join(", ") || t(locale, "ключи не настроены", "no keys configured") : "..."}</strong></div>
             </div>
+          </div>
+
+          <div className="card">
+            <h2>{t(locale, "Смена пароля", "Change password")}</h2>
+            <form className="form" onSubmit={(event) => void handlePasswordChange(event)}>
+              <label>
+                <span>{t(locale, "Текущий пароль", "Current password")}</span>
+                <input type="password" value={passwordForm.current_password} onChange={(event) => setPasswordForm((current) => ({ ...current, current_password: event.target.value }))} />
+              </label>
+              <label>
+                <span>{t(locale, "Новый пароль", "New password")}</span>
+                <input type="password" value={passwordForm.new_password} onChange={(event) => setPasswordForm((current) => ({ ...current, new_password: event.target.value }))} />
+              </label>
+              <button type="submit" disabled={passwordSaving}>
+                {passwordSaving ? t(locale, "Сохранение...", "Saving...") : t(locale, "Обновить пароль", "Update password")}
+              </button>
+            </form>
           </div>
 
           <div className="card">
@@ -975,6 +1131,7 @@ export default function App() {
 
       <section className="card nav-card">
         <div className="tabs">
+          <button type="button" className={activeTab === "guide" ? "tab-button active" : "tab-button"} onClick={() => setActiveTab("guide")}>{t(locale, "Справка", "Guide")}</button>
           <button type="button" className={activeTab === "history" ? "tab-button active" : "tab-button"} onClick={() => setActiveTab("history")}>{t(locale, "История", "History")}</button>
           <button type="button" className={activeTab === "watchlist" ? "tab-button active" : "tab-button"} onClick={() => setActiveTab("watchlist")}>Watchlist</button>
           <button type="button" className={activeTab === "proxies" ? "tab-button active" : "tab-button"} onClick={() => setActiveTab("proxies")}>Proxies</button>
@@ -982,16 +1139,56 @@ export default function App() {
           {session.user.role === "owner" || session.user.role === "admin" ? <button type="button" className={activeTab === "admin" ? "tab-button active" : "tab-button"} onClick={() => setActiveTab("admin")}>{t(locale, "Админка", "Admin")}</button> : null}
         </div>
 
+        {activeTab === "guide" ? (
+          <div className="tab-panel">
+            <div className="card-head">
+              <div>
+                <h2>{t(locale, "Как читать результаты", "How to read results")}</h2>
+                <p className="muted">{t(locale, "Здесь краткая памятка по risk score, статусам, runtime и webhook-уведомлениям.", "A quick guide for risk score, statuses, runtime, and webhook notifications.")}</p>
+              </div>
+            </div>
+            <div className="provider-grid">
+              <article className="provider-card">
+                <h3>{t(locale, "Risk score", "Risk score")}</h3>
+                <p>{t(locale, "0 означает чистую проверку. Чем выше число, тем больше негативных сигналов собрано из DNSBL, Safe Browsing, Lumen, email-auth и внешних reputation-провайдеров.", "0 means a clean result. Higher values mean more negative signals from DNSBL, Safe Browsing, Lumen, email auth, and external reputation providers.")}</p>
+                <p>{t(locale, "Обычно 1-59 это риск, от 60 и выше это уже высокий риск и чаще всего листинг.", "Usually 1-59 means warning risk, while 60+ means high risk and often a listed result.")}</p>
+              </article>
+              <article className="provider-card">
+                <h3>{t(locale, "Статусы", "Statuses")}</h3>
+                <p>{t(locale, "Чисто: негативных совпадений нет.", "Clean: no negative matches were found.")}</p>
+                <p>{t(locale, "Риск: есть косвенные или неполные сигналы, но без явного жёсткого листинга.", "Warning: there are indirect or partial signals, but no hard listing was found.")}</p>
+                <p>{t(locale, "В листинге: есть DNSBL-листинг или серьёзный провайдерский сигнал вроде malware/phishing.", "Listed: there is a DNSBL listing or a serious provider signal such as malware or phishing.")}</p>
+              </article>
+              <article className="provider-card">
+                <h3>Runtime</h3>
+                <p>{t(locale, "HTTP стратегия: сколько прокси пробуется подряд и разрешён ли прямой запрос без прокси.", "HTTP strategy: how many proxies are tried per request and whether direct fallback is allowed.")}</p>
+                <p>{t(locale, "Очередь: сколько задач можно выполнять параллельно и какой лимит на создание новых проверок в минуту.", "Queue: how many jobs can run in parallel and what creation rate limit is allowed per minute.")}</p>
+                <p>{t(locale, "Watchlist: сколько активных доменов мониторится и как часто планировщик их перепроверяет.", "Watchlist: how many active domains are monitored and how often the scheduler rechecks them.")}</p>
+              </article>
+              <article className="provider-card">
+                <h3>Webhooks</h3>
+                <p>{t(locale, "Webhook отправляет HTTP-уведомление на твой URL после завершения или ошибки проверки.", "A webhook sends an HTTP notification to your URL when a check completes or fails.")}</p>
+                <p>{t(locale, "Это нужно, если ты хочешь получать результаты во внешний сервис, CRM, Telegram-бота или свой backend.", "Use it when you want to deliver results into an external service, CRM, Telegram bot, or your own backend.")}</p>
+              </article>
+            </div>
+          </div>
+        ) : null}
+
         {activeTab === "history" ? (
           <div className="tab-panel">
             <div className="card-head">
               <div>
                 <h2>{t(locale, "История проверок", "Check history")}</h2>
               </div>
+              <div className="actions">
+                <button type="button" onClick={() => exportHistoryJson(filteredHistory)}>{t(locale, "Экспорт JSON", "Export JSON")}</button>
+                <button type="button" className="ghost-button" onClick={() => exportHistoryCsv(filteredHistory)}>{t(locale, "Экспорт CSV", "Export CSV")}</button>
+              </div>
             </div>
-            <form className="filter-row" onSubmit={(event) => { event.preventDefault(); void loadHistory(historyDomain, historyDays); }}>
+            <form className="filter-row history-filter-row" onSubmit={(event) => { event.preventDefault(); void loadHistory("", historyDays); }}>
               <label><span>{t(locale, "Домен", "Domain")}</span><input value={historyDomain} onChange={(event) => setHistoryDomain(event.target.value)} /></label>
-              <label><span>{t(locale, "Период", "Period")}</span><select value={historyDays} onChange={(event) => setHistoryDays(event.target.value)}><option value="7">{t(locale, "7 дней", "7 days")}</option><option value="30">{t(locale, "30 дней", "30 days")}</option><option value="90">{t(locale, "90 дней", "90 days")}</option></select></label>
+              <label><span>{t(locale, "Период, дней", "Period, days")}</span><input type="number" min="1" max="365" value={historyDays} onChange={(event) => setHistoryDays(event.target.value)} /></label>
+              <label><span>{t(locale, "Количество", "Limit")}</span><input type="number" min="1" max="500" value={historyLimit} onChange={(event) => setHistoryLimit(event.target.value)} /></label>
               <label><span>{t(locale, "Статус", "Status")}</span><select value={historyStatusFilter} onChange={(event) => setHistoryStatusFilter(event.target.value)}><option value="all">{t(locale, "Все", "All")}</option><option value="listed">{t(locale, "В листинге", "Listed")}</option><option value="warning">{t(locale, "Риск", "Warning")}</option><option value="clean">{t(locale, "Чисто", "Clean")}</option></select></label>
               <button type="submit">{historyLoading ? t(locale, "Загрузка...", "Loading...") : t(locale, "Обновить", "Refresh")}</button>
             </form>
@@ -999,7 +1196,12 @@ export default function App() {
               {filteredHistory.map((item) => (
                 <article key={`${item.job_id}-${item.domain}-${item.checked_at}`} className="history-row">
                   <div><strong>{item.domain}</strong><p>{formatDate(locale, item.checked_at)} | job {item.job_id}</p></div>
-                  <div className="history-metrics"><StatusBadge status={item.overall_status} locale={locale} /><strong>{item.risk_score}</strong></div>
+                  <div className="history-metrics">
+                    <StatusBadge status={item.overall_status} locale={locale} />
+                    <strong>{item.risk_score}</strong>
+                    <button type="button" onClick={() => void openHistoryDetails(item)}>{t(locale, "Подробнее", "Details")}</button>
+                    <button type="button" className="ghost-button" onClick={() => void removeHistoryItem(item.id)}>{t(locale, "Удалить", "Delete")}</button>
+                  </div>
                 </article>
               ))}
               {!filteredHistory.length ? <p className="empty-block">{t(locale, "История пока пуста.", "History is empty so far.")}</p> : null}
@@ -1050,7 +1252,7 @@ export default function App() {
 
         {activeTab === "webhooks" ? (
           <div className="tab-panel">
-            <div className="card-head"><div><h2>Webhooks</h2></div></div>
+            <div className="card-head"><div><h2>Webhooks <Hint text={t(locale, "Webhook отправляет POST-запрос на внешний URL после завершения или ошибки проверки.", "A webhook sends a POST request to an external URL when a scan completes or fails.")} /></h2></div></div>
             <form className="filter-row" onSubmit={(event) => void handleWebhookSubmit(event)}>
               <label><span>URL</span><input value={webhookUrl} onChange={(event) => setWebhookUrl(event.target.value)} placeholder="https://example.com/webhooks/domain-checker" /></label>
               <label><span>{t(locale, "События", "Events")}</span><input value={webhookEvents} onChange={(event) => setWebhookEvents(event.target.value)} /></label>
@@ -1122,6 +1324,33 @@ export default function App() {
                 </label>
                 <button type="submit" disabled={adminUserSaving}>
                   {adminUserSaving ? t(locale, "Создание...", "Creating...") : t(locale, "Создать пользователя", "Create user")}
+                </button>
+              </form>
+            </div>
+            <div className="card inset-card">
+              <div className="card-head">
+                <div>
+                  <h2>{t(locale, "Сбросить пароль пользователя", "Reset user password")}</h2>
+                </div>
+              </div>
+              <form className="form provider-form" onSubmit={(event) => void handleAdminPasswordReset(event)}>
+                <label>
+                  <span>{t(locale, "Пользователь", "User")}</span>
+                  <select value={adminPasswordForm.user_id} onChange={(event) => setAdminPasswordForm((current) => ({ ...current, user_id: event.target.value }))}>
+                    <option value="">{t(locale, "Выбери пользователя", "Select user")}</option>
+                    {adminUsers.map((item) => (
+                      <option key={item.id} value={String(item.id)}>
+                        {item.username}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>{t(locale, "Новый пароль", "New password")}</span>
+                  <input type="password" value={adminPasswordForm.password} onChange={(event) => setAdminPasswordForm((current) => ({ ...current, password: event.target.value }))} />
+                </label>
+                <button type="submit" disabled={adminPasswordSaving}>
+                  {adminPasswordSaving ? t(locale, "Сохранение...", "Saving...") : t(locale, "Обновить пароль", "Update password")}
                 </button>
               </form>
             </div>

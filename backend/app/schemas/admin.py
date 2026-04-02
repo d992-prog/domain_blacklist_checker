@@ -22,6 +22,10 @@ class AdminUserUpdateRequest(BaseModel):
     access_expires_at: datetime | None = None
 
 
+class AdminPasswordUpdateRequest(BaseModel):
+    password: str = Field(min_length=6, max_length=128)
+
+
 class AdminUserResponse(BaseModel):
     id: int
     username: str

@@ -67,6 +67,7 @@ export type JobStatusResponse = {
 };
 
 export type HistoryItem = {
+  id: number;
   job_id: string;
   domain: string;
   overall_status: string;
@@ -276,6 +277,10 @@ export const api = {
         days: String(days),
       }).toString()}`,
     ),
+  deleteHistory: (id: number) =>
+    request<{ detail: string }>(`/history/${id}`, {
+      method: "DELETE",
+    }),
   getProxies: () => request<ProxyEndpoint[]>("/proxies"),
   createProxy: (proxy_url: string) =>
     request<ProxyEndpoint>("/proxies", {
@@ -336,6 +341,11 @@ export const api = {
     request<User>(`/admin/users/${id}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
+    }),
+  updateAdminUserPassword: (id: number, password: string) =>
+    request<{ detail: string }>(`/admin/users/${id}/password`, {
+      method: "PATCH",
+      body: JSON.stringify({ password }),
     }),
   getProviderSettings: () => request<ProviderSettings>("/admin/provider-settings"),
   updateProviderSettings: (payload: Omit<ProviderSettings, "configured">) =>

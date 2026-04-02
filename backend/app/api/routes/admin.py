@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.schemas.admin import (
     AdminAuditLogResponse,
     AdminOverviewResponse,
+    AdminPasswordUpdateRequest,
     AdminUserCreateRequest,
     AdminUserResponse,
     AdminUserUpdateRequest,
@@ -178,6 +179,30 @@ async def update_user(
     await db.commit()
     await db.refresh(user)
     return UserResponse.model_validate(user)
+
+
+@router.patch("/users/{user_id}/password")
+async def update_user_password(
+    user_id: int,
+    payload: AdminPasswordUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+) -> dict[str, str]:
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.password_hash = hash_password(payload.password)
+    user.updated_at = utcnow()
+    await add_audit_log(
+        db,
+        actor_user_id=admin.id,
+        target_user_id=user.id,
+        action="user_password_reset",
+        details="Password was reset by administrator.",
+    )
+    await db.commit()
+    return {"detail": "Password updated"}
 
 
 @router.get("/provider-settings", response_model=ProviderSettingsResponse)

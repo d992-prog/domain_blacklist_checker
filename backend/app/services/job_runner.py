@@ -261,6 +261,7 @@ class JobRunner:
             result = await session.execute(query)
             return [
                 {
+                    "id": report.id,
                     "job_id": report.job_id,
                     "domain": report.domain,
                     "overall_status": report.overall_status,
@@ -269,6 +270,23 @@ class JobRunner:
                 }
                 for report in result.scalars().all()
             ]
+
+    async def delete_history_item(self, owner_id: int, report_id: int) -> bool:
+        async with AsyncSessionLocal() as session:
+            report = await session.get(DomainReport, report_id)
+            if report is None or report.owner_id != owner_id:
+                return False
+            job_id = report.job_id
+            await session.delete(report)
+            await session.commit()
+
+            remaining = await session.execute(select(DomainReport.id).where(DomainReport.job_id == job_id).limit(1))
+            if remaining.scalar_one_or_none() is None:
+                job = await session.get(CheckJob, job_id)
+                if job is not None and job.owner_id == owner_id:
+                    await session.delete(job)
+                    await session.commit()
+            return True
 
     async def create_webhook(self, owner_id: int, url: str, events: list[str]) -> WebhookSubscription:
         webhook = WebhookSubscription(owner_id=owner_id, url=url, events=events)
